@@ -1,16 +1,52 @@
 ﻿#include <WiFi.h>
+#include "EEPROM.h"
+#include <DNSServer.h>
+#include <WiFiManager.h>
 #include <PubSubClient.h>
 #include <Credentials/Credentials.h>
+#include <ArduinoJson.h>    //https://github.com/bblanchon/ArduinoJson
 
 const int DONE_PIN = 13;
-int battery_voltage = 0; // raw reading
-float valtage_devider_ratio = 0.0;
+double battery_voltage = 0.0;
+double voltage_devider_ratio = 2.0;
+
+//--------------------------------Open weather map---------------------------------------------------
+int weatherID = 0;
+char* servername = "api.openweathermap.org";  // remote server we will connect to
+String result;
+String weatherDescription = "";
+String weatherLocation = "";
+String CityID = "706448"; //Sparta, Greece
+String APIKEY = "85caa036010dce285793ea9a1a494fea";
+
+//-------------------------------NTP---------------------------------------------------
+#include <NTPClient.h>
+#include <WiFiUdp.h>
+#include <time.h>    // Built-in
+
+WiFiUDP ntpUDP;
+NTPClient timeClient(ntpUDP);
+String time_str, current_hour, current_minute, current_day, current_month, current_year;
+
+
+//--------------------------------WifiManager--------------------------------------------
+String ssid;
+String passw;
+int EEPROM_SIZE = 1024;
+int ssid_address = 0; // in EEPROM
+int passw_address = 20; // in EEPROM
+bool shouldSaveConfig = false;
+WiFiManager wifiManager;
 
 //--------------------------------WIFI----------------------------------------------------
 WiFiClient espClient;
 
 //--------------------------------MQTT----------------------------------------------------
 PubSubClient client(espClient);
+
+//----------------------------------Currency---------------------------------------------
+//https://github.com/espressif/arduino-esp32/blob/master/libraries/WiFiClientSecure/examples/WiFiClientSecure/WiFiClientSecure.ino
+//https://1forge.com/forex-data-api/api-documentation
 
 //--------------------------------E-Paper----------------------------------------------------
 
@@ -28,8 +64,9 @@ PubSubClient client(espClient);
 //#include GxEPD_BitmapExamples
 
 // FreeFonts from Adafruit_GFX
-#include <Fonts/FreeMonoBold9pt7b.h>
-#include <Fonts/FreeMonoBold12pt7b.h>
+#include <Fonts/FreeSans24pt7b.h>
+#include <Fonts/FreeSans18pt7b.h>
+#include <Fonts/FreeSansBold9pt7b.h>
 #include <Fonts/FreeMonoBold18pt7b.h>
 #include <Fonts/FreeMonoBold24pt7b.h>
 
@@ -40,13 +77,12 @@ PubSubClient client(espClient);
 // for SPI pin definitions see e.g.:
 // C:\Users\xxx\Documents\Arduino\hardware\espressif\esp32\variants\lolin32\pins_arduino.h
 GxIO_Class io(SPI, /*CS=5*/ SS, /*DC=*/ 17, /*RST=*/ 16); // arbitrary selection of 17, 16
-GxEPD_Class display(io, /*RST=*/ 16, /*BUSY=*/ 4); // arbitrary selection of (16), 4  i have used 14 instead 4
+GxEPD_Class display(io, /*RST=*/ 16, /*BUSY=*/ 4); // arbitrary selection of (16), 4  i have used 14 instead 4 ***128/296
 
 
 //--------------------------------Sensor----------------------------------------------------
 
 #include <SparkFunHTU21D.h>
-
 HTU21D sensor;
 float humd = 0.00;
 float temp = 0.00;
@@ -55,24 +91,27 @@ String temperature = "0.00";
 
 void setup()
 {
+	Serial.begin(115200);
 	pinMode(DONE_PIN, OUTPUT);
 	digitalWrite(DONE_PIN, LOW);
-	Serial.begin(115200);
-	sensor.begin();
-	humd = sensor.readHumidity();
-	temp = sensor.readTemperature();
-	humidity = String(humd, 1);
-	temperature = String(temp, 1);
-	WiFi.mode(WIFI_STA);
-	WiFi.begin(SSID, PASSWORD);
-	delay(3000);
-	connectToBroker();
+	battery_voltage = ReadVoltage(36) * voltage_devider_ratio;
+	checkEEPROM();
+	conectToWiFi();	
+	saveWiFiCredentials();
+	getSensorData();
+	StartTime();
+	//UpdateLocalTime();
+	//GetTime();
+	delay(1000);
+	//connectToBroker();
+	//getWeatherData();
 	//getDataFromServer();
 	display.init(115200);
-	drawScreen1();
-	showFontr("FreeMonoBold12pt7b");
-	Serial.println(millis());
-	digitalWrite(DONE_PIN, LOW);	
+	drawDisplay();
+	//drawScreen1();
+	//showFontr("FreeMonoBold12pt7b");
+	//Serial.println(millis());
+	digitalWrite(DONE_PIN, HIGH);	
 }
 
 
@@ -85,27 +124,110 @@ void loop()
 
 }
 
+void saveConfigCallback() {
+	Serial.println("Should save config");
+	shouldSaveConfig = true;
+}
+
+
+
+
+// Used for storing of MD5 hash
+void checkEEPROM() {
+	if (!EEPROM.begin(EEPROM_SIZE)) {
+		Serial.println("Failed to initialise EEPROM");
+		Serial.println("Restarting...");
+		delay(1000);
+		ESP.restart();
+	}
+}
+
+void saveToEEPROM(String data, int addr) {
+	Serial.println("Writing to EEPROM : " + data);
+	EEPROM.writeString(addr, data);
+	EEPROM.commit();	
+}
+
+
+String readFromEEPROM(int addr) {
+	String res = EEPROM.readString(addr);
+	Serial.println("Read from EEPROM : " + res);
+	delay(100);
+	return res;
+}
+
+void saveWiFiCredentials() {
+	if (shouldSaveConfig) {
+		passw = wifiManager.getPassword();
+		ssid = wifiManager.getSSID();
+		saveToEEPROM(passw, passw_address);
+		saveToEEPROM(ssid, ssid_address);
+	}
+}
+
+void getSensorData() {
+	sensor.begin();
+	humd = sensor.readHumidity();
+	temp = sensor.readTemperature();
+	if (temp > 50)
+	{
+		delay(500);
+		temp = sensor.readTemperature();
+	}
+	if (humd > 100)
+	{
+		delay(500);
+		humd = sensor.readHumidity();
+	}
+	humidity = String(humd, 1);
+	temperature = String(temp, 1);
+}
+
+void conectToWiFi() {
+	wifiManager.setSaveConfigCallback(saveConfigCallback);
+	passw = readFromEEPROM(passw_address);
+	ssid = readFromEEPROM(ssid_address);
+	int passLengs = passw.length() + 1;
+	int ssidLengs = ssid.length() + 1;
+	char _pass[sizeof(passLengs)];
+	char _ssid[sizeof(ssidLengs)];
+	ssid.toCharArray(_ssid, sizeof(ssidLengs));
+	passw.toCharArray(_pass, sizeof(passLengs));
+	wifiManager.autoConnect(_ssid, _pass);
+	//if you get here you have connected to the WiFi
+	Serial.println("connected...yeey :)");
+}
+
+//Connection to MQTT broker
+void connectToBroker() {
+	client.setServer(SERVER_IP, MQTT_SERVER_PORT);
+	if (client.connect("ESP32_E_Paper_Screen")) {
+		client.publish("ESP32_E_Paper_Screen/temperature", temperature.c_str());
+		client.publish("ESP32_E_Paper_Screen/humidity", humidity.c_str());
+	}
+}
+
 void drawScreen1()
 {
 	display.drawExamplePicture(BitmapWaveshare_black, BitmapWaveshare_red, sizeof(BitmapWaveshare_black), sizeof(BitmapWaveshare_red));
 }
 
-void showFontr(const char name[])
-{
-	display.setTextColor(GxEPD_BLACK);
-	display.setFont(&FreeMonoBold12pt7b);
-	display.setCursor(0, 0);
-	display.println();
-	display.println(name);
-	display.println(" !\"#$%&'()*+,-./");
-	display.println("0123456789:;<=>?");
-	display.println("@ABCDEFGHIJKLMNO");
-	display.println("PQRSTUVWXYZ[\\]^_");
-	display.println("`abcdefghijklmno");
-	display.println("pqrstuvwxyz{|}~ ");
-	display.update();
-	delay(5000);
-}
+//void showFontr(const char name[])
+//{
+//	display.setTextColor(GxEPD_BLACK);
+//	display.setFont(&FreeMonoBold12pt7b);
+//	display.setCursor(0, 0);
+//	display.println();
+//	display.println(name);
+//	display.println(" !\"#$%&'()*+,-./");
+//	display.println("0123456789:;<=>?");
+//	display.println("@ABCDEFGHIJKLMNO");
+//	display.println("PQRSTUVWXYZ[\\]^_");
+//	display.println("`abcdefghijklmno");
+//	display.println("pqrstuvwxyz{|}~ ");
+//	display.update();
+//	delay(5000);
+//}
 
 //
 //#if defined(_GxGDEW029Z10_H_)
@@ -177,13 +299,291 @@ void showFontr(const char name[])
 //}
 
 
+void drawDisplay()
+{
+	display.setRotation(1);
+	display.fillScreen(GxEPD_WHITE);
+	//display.setFont(&FreeMonoBold18pt7b);
+	display.setTextColor(GxEPD_BLACK);
+	/*display.drawBitmap(Olga_Sergey, 0, 100, 300, 200, GxEPD_BLACK);*/
+	display.fillRect(0, 108, 296, 2, GxEPD_RED);
+	/*display.fillRect(0, 100, 400, 3, GxEPD_BLACK);
+	display.fillRect(100, 0, 3, 100, GxEPD_BLACK);
+	display.fillRect(200, 0, 3, 100, GxEPD_BLACK);
+	display.fillRect(300, 100, 100, 3, GxEPD_BLACK);
+	display.fillRect(300, 190, 100, 3, GxEPD_BLACK);*/
+	//Current date
+	display.setFont(&FreeSans24pt7b);
+	display.setCursor(20, 80);
+	display.print(temperature);
+	display.setCursor(170, 80);
+	display.print(humidity);
+	display.setTextColor(GxEPD_RED);
+	display.setFont(&FreeSans18pt7b);
+	display.setCursor(115, 80);
+	display.print("C");
+	display.setCursor(260, 80);
+	display.print("%");
 
-//Connection to MQTT broker
-void connectToBroker() {
-	client.setServer(SERVER_IP, MQTT_SERVER_PORT);
-	if (client.connect("ESP32_E_Paper_Screen")) {
-		client.publish("ESP32_E_Paper_Screen/temperature", temperature.c_str());
-		client.publish("ESP32_E_Paper_Screen/humidity", humidity.c_str());
-	}
+
+	display.setTextColor(GxEPD_BLACK);
+	display.setFont(&FreeSansBold9pt7b);
+	display.setCursor(260, 126);
+	display.print(battery_voltage);
+
+	display.setCursor(0, 126);
+	display.print(time_str);
+	//display.setFont(&FreeMonoBold18pt7b);
+	//display.setCursor(30, 73);
+	//display.print(day);
+	//display.setFont(&FreeMonoBold12pt7b);
+	//display.setCursor(30, 95);
+	//display.print(month);
+
+	////Out temperature
+	//display.drawBitmap(out_temp_icon, 203, 17, 50, 50, GxEPD_BLACK);
+	//if (outTemp > outTemp_prev)
+	//{
+	//	showTrendIcon(gridicons_arrow_up);
+	//}
+	//else if (outTemp < outTemp_prev)
+	//{
+	//	showTrendIcon(gridicons_arrow_down);
+	//}
+	//else
+	//{
+	//	showTrendIcon(gridicons_arrow_left);
+	//}
+
+	//showWeatherIcon();
+
+	////kitchen temp
+	//display.setFont(&FreeMonoBold9pt7b);
+	//display.setCursor(305, 32);
+	//display.print("Kitchen");
+	//display.setFont(&FreeMonoBold18pt7b);
+	//display.setCursor(305, 63);
+	//String temp = String(t, 1);
+	//display.print(temp);
+	//display.setCursor(320, 95);
+	//String hum = String(h, 0) + "%";
+	//display.print(hum);
+	////Living temp
+	//display.setFont(&FreeMonoBold9pt7b);
+	//display.setCursor(310, 120);
+	//display.print("Living");
+	//display.setFont(&FreeMonoBold18pt7b);
+	//display.setCursor(305, 151);
+	//String livTemp = String(livingTemp, 1);
+	//display.print(livTemp);
+	//display.setCursor(320, 183);
+	//String livHum = String(livHumidity, 0) + "%";
+	//display.print(livHum);
+	////Pressure
+	//display.setCursor(108, 95);
+	//String press = String(pressure, 0);
+	//display.print(press);
+	//display.drawLine(100, 37, 200, 37, GxEPD_BLACK);
+	//drowPressureChart();
+	////Out temperature
+	//display.setCursor(210, 95);
+	//String out_temper = String(outTemp, 1);
+	//if (out_temper.length() > 4)
+	//{
+	//	display.setFont(&FreeMonoBold12pt7b);
+	//	display.print(out_temper);
+	//	display.setFont(&FreeMonoBold18pt7b);
+	//}
+	//else
+	//{
+	//	display.print(out_temper);
+	//}
+	//display.setFont(&FreeMonoBold9pt7b);
+	//display.setCursor(310, 208);
+	//String windSp = String(windSpeed, 0) + " m/s";
+	//display.print(windSp);
+	//display.setFont(&FreeMonoBold18pt7b);
+	//long now = millis();
+	//if (now - lastScreenRefresh > screenRefreshPeriod) {
+		display.update();
+	//	lastScreenRefresh = now;
+	//}
 }
 
+//void showWeatherIcon() {
+//	if (iconId.equals("01")) // clear sky
+//	{
+//		drowIcon(sun);
+//	}
+//	else if (iconId.equals("02")) // few clouds
+//	{
+//		drowIcon(sun_cloud);
+//	}
+//	else if (iconId.equals("03")) // scattered clouds
+//	{
+//		drowIcon(cloud);
+//	}
+//	else if (iconId.equals("04")) // broken clouds
+//	{
+//		drowIcon(heavy_clouds);
+//	}
+//	else if (iconId.equals("09")) // shower rain
+//	{
+//		drowIcon(shower);
+//	}
+//	else if (iconId.equals("10")) // rain
+//	{
+//		drowIcon(rain);
+//	}
+//	else if (iconId.equals("11")) // thunderstorm
+//	{
+//		drowIcon(storm);
+//	}
+//	else if (iconId.equals("13")) // snow
+//	{
+//		drowIcon(snow);
+//	}
+//	else if (iconId.equals("50")) // mist
+//	{
+//		drowIcon(mist);
+//	}
+//	else
+//	{
+//		drowIcon(question);
+//	}
+//}
+//
+//void drowIcon(const uint8_t *bitmap) {
+//	display.drawBitmap(bitmap, 307, 212, 80, 80, GxEPD_BLACK);
+//}
+
+void getWeatherData() //client function to send/receive GET request data.
+{
+	String result = "";
+	const int httpPort = 80;
+	if (!espClient.connect(servername, httpPort)) {
+		return;
+	}
+	// We now create a URI for the request
+	String url = "/data/2.5/forecast?id=" + CityID + "&units=metric&cnt=1&APPID=" + APIKEY;
+
+	// This will send the request to the server
+	espClient.print(String("GET ") + url + " HTTP/1.1\r\n" +
+		"Host: " + servername + "\r\n" +
+		"Connection: close\r\n\r\n");
+	unsigned long timeout = millis();
+	while (espClient.available() == 0) {
+		if (millis() - timeout > 5000) {
+			espClient.stop();
+			return;
+		}
+	}
+
+	// Read all the lines of the reply from server
+	while (espClient.available()) {
+		result = espClient.readStringUntil('\r');
+	}
+
+	result.replace('[', ' ');
+	result.replace(']', ' ');
+
+	char jsonArray[result.length() + 1];
+	result.toCharArray(jsonArray, sizeof(jsonArray));
+	jsonArray[result.length() + 1] = '\0';
+
+	StaticJsonBuffer<1024> json_buf;
+	JsonObject &root = json_buf.parseObject(jsonArray);
+	if (!root.success())
+	{
+		Serial.println("parseObject() failed");
+	}
+
+	String location = root["city"]["name"];
+	String temperature = root["list"]["main"]["temp"];
+	String weather = root["list"]["weather"]["main"];
+	String description = root["list"]["weather"]["description"];
+	String idString = root["list"]["weather"]["id"];
+	String timeS = root["list"]["dt_txt"];
+
+	weatherID = idString.toInt();
+	Serial.print("WeatherID: ");
+	Serial.println(weatherID);
+	Serial.println(location);
+	Serial.println(temperature);
+	Serial.println(weather);
+	Serial.println(description);
+	Serial.println(timeS);
+}
+
+double ReadVoltage(byte pin) {
+	double reading = analogRead(pin); // Reference voltage is 3v3 so maximum reading is 3v3 = 4095 in range 0 to 4095
+	if (reading < 1 || reading > 4095) return 0;
+	// return -0.000000000009824 * pow(reading,3) + 0.000000016557283 * pow(reading,2) + 0.000854596860691 * reading + 0.065440348345433;
+	return -0.000000000000016 * pow(reading, 4) + 0.000000000118171 * pow(reading, 3) - 0.000000301211691 * pow(reading, 2) + 0.001109019271794 * reading + 0.034143524634089;
+} // Added an improved polynomial, use either, comment out as required
+
+
+  /* ADC readings v voltage
+  *  y = -0.000000000009824x3 + 0.000000016557283x2 + 0.000854596860691x + 0.065440348345433
+  // Polynomial curve match, based on raw data thus:
+  *   464     0.5
+  *  1088     1.0
+  *  1707     1.5
+  *  2331     2.0
+  *  2951     2.5
+  *  3775     3.0
+  *
+  */
+
+String GetTime() {
+	struct tm timeinfo;
+	while (!getLocalTime(&timeinfo)) {
+		Serial.println("Failed to obtain time - trying again");
+	}
+	//See http://www.cplusplus.com/reference/ctime/strftime/
+	//Serial.println(&timeinfo, "%a %b %d %Y %H:%M:%S"); // Displays: Saturday, June 24 2017 14:05:49
+	char output[50];
+	strftime(output, 50, "%d/%m/%y %H:%M:%S", &timeinfo); //Use %m/%d/%y for USA format
+	time_str = output;
+	Serial.println(time_str);
+	return time_str; // returns date-time formatted like this "11/12/17 22:01:00"
+}
+
+String Update_DateTime() {
+	struct tm timeinfo;
+	while (!getLocalTime(&timeinfo)) {
+		Serial.println("Failed to obtain time - trying again");
+	}
+	//See http://www.cplusplus.com/reference/ctime/strftime/
+	char output[50];
+	strftime(output, 50, "%H", &timeinfo);
+	current_hour = output;
+	strftime(output, 50, "%M", &timeinfo);
+	current_minute = output;
+	strftime(output, 50, "%d", &timeinfo);
+	current_day = output;
+	strftime(output, 50, "%m", &timeinfo);
+	current_month = output;
+	strftime(output, 50, "%Y", &timeinfo);
+	current_year = output;
+	Serial.println(time_str);
+	return time_str; // returns date-time formatted like this "11/12/17 22:01:00"
+}
+
+void StartTime() {
+	configTime(0, 0, "0.uk.pool.ntp.org", "time.nist.gov");
+	setenv("TZ", "GMT0BST,M3.5.0/01,M10.5.0/02", 1); // Change for your location
+	UpdateLocalTime();
+}
+
+void UpdateLocalTime() {
+	struct tm timeinfo;
+	while (!getLocalTime(&timeinfo)) {
+		Serial.println("Failed to obtain time");
+	}
+	//See http://www.cplusplus.com/reference/ctime/strftime/
+	Serial.println(&timeinfo, "%a %b %d %Y   %H:%M:%S"); // Displays: Saturday, June 24 2017 14:05:49
+	char output[50];
+	strftime(output, 50, "%a %d-%b-%y  (%H:%M:%S)", &timeinfo);
+	time_str = output;
+}
