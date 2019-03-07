@@ -7,7 +7,7 @@ const int DONE_PIN = 13;
 double battery_voltage = 0.0;
 double voltage_devider_ratio = 2.2106;
 bool wifiConnected = false;
-bool sensorReadingOk = false;
+bool sensorReadingOk = true;
 
 //-------------------------------NTP---------------------------------------------------
 #include <NTPClient.h>
@@ -57,7 +57,7 @@ void setup()
 	Serial.begin(115200);
 	pinMode(DONE_PIN, OUTPUT);
 	digitalWrite(DONE_PIN, LOW);
-	battery_voltage = ReadVoltage(36) * voltage_devider_ratio;
+	//battery_voltage = ReadVoltage(36) * voltage_devider_ratio;
 	getSensorData();
 	if (sensorReadingOk)
 	{
