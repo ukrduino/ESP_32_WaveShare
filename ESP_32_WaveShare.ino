@@ -24,6 +24,7 @@ WiFiClient espClient;
 //https://1forge.com/forex-data-api/api-documentation
 #include <HTTPClient.h>
 HTTPClient http;
+#include <time.h>    // Built-in
 
 void setup()
 {
@@ -82,10 +83,15 @@ void getWeatherData() //client function to send/receive GET request data.
 
 	String value = root["value"];
 	String text = root["text"];
-	String timestamp = root["timestamp"];
+	unsigned long timestamp = root["timestamp"];
 	Serial.println(value);
 	Serial.println(text);
 	Serial.println(timestamp);
+	time_t t = timestamp;
+	char buff[32];
+	sprintf(buff, "%02d.%02d.%02d %02d:%02d:%02d", day(t), month(t), year(t), hour(t), minute(t), second(t));
+	strftime(buff, 20, "%Y-%m-%d %H:%M:%S", localtime(&now));
+	Serial.println(buff);
 	//String result = "";
 	//const int httpPort = 80;
 	//if (!espClient.connect(servername2, httpPort)) {
