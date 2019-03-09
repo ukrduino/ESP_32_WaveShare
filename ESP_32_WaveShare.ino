@@ -4,8 +4,8 @@
 
 
 const int DONE_PIN = 13;
-double battery_voltage = 0.0;
-double voltage_devider_ratio = 2.2106;
+//double battery_voltage = 0.0;
+//double voltage_devider_ratio = 2.2106;
 bool wifiConnected = false;
 bool sensorReadingOk = true;
 
@@ -173,20 +173,20 @@ void UpdateLocalTime() {
 
 
 void startWiFi() {
-	int connAttempts = 0;
+	int connStarttSec = 0;
 	Serial.print(F("\r\nConnecting to: ")); Serial.println(String(SSID));
 	WiFi.disconnect();
 	WiFi.mode(WIFI_STA);
 	WiFi.begin(SSID, PASSWORD);
 	while (WiFi.status() != WL_CONNECTED) {
-		delay(500); Serial.print(".");
-		if (connAttempts > 20) {
+		delay(1000); Serial.print(".");
+		if (connStarttSec > 5) {
 			WiFi.disconnect();
 			Serial.println("Cant connect WiFi :(");
 			wifiConnected = false;
 			return;
 		}
-		connAttempts++;
+		connStarttSec++;
 	}
 	Serial.println("WiFi connected");
 	wifiConnected = true;
