@@ -5,13 +5,8 @@
 
 
 //--------------------------------Open weather map---------------------------------------------------
-int weatherID = 0;
-char* servername = "api.openweathermap.org";  // remote server we will connect to
-char* servername2 = "http://forex.1forge.com";  // remote server we will connect to
-String result;
-String weatherDescription = "";
-String weatherLocation = "";
-String CityID = "706448"; //Sparta, Greece
+char* servername = "api.openweathermap.org";
+String CityID = "706448"; 
 String APIKEY = "85caa036010dce285793ea9a1a494fea";
 
 
@@ -108,7 +103,7 @@ void getWeatherData() //client function to send/receive GET request data.
 		return;
 	}
 	// We now create a URI for the request
-	String url = "/data/2.5/forecast?id=" + CityID + "&units=metric&cnt=1&APPID=" + APIKEY;
+	String url = "/data/2.5/forecast?id=" + CityID + "&units=metric&cnt=6&APPID=" + APIKEY;
 
 	// This will send the request to the server
 	espClient.print(String("GET ") + url + " HTTP/1.1\r\n" +
@@ -127,35 +122,41 @@ void getWeatherData() //client function to send/receive GET request data.
 		result = espClient.readStringUntil('\r');
 	}
 
-	result.replace('[', ' ');
-	result.replace(']', ' ');
-
-	char jsonArray[result.length() + 1];
-	result.toCharArray(jsonArray, sizeof(jsonArray));
-	jsonArray[result.length() + 1] = '\0';
-
-	StaticJsonBuffer<1024> json_buf;
-	JsonObject &root = json_buf.parseObject(jsonArray);
+	DynamicJsonBuffer json_buf(5000);
+	JsonObject &root = json_buf.parseObject(result);
 	if (!root.success())
 	{
 		Serial.println("parseObject() failed");
 	}
 
-	String location = root["city"]["name"];
-	String temperature = root["list"]["main"]["temp"];
-	String weather = root["list"]["weather"]["main"];
-	String description = root["list"]["weather"]["description"];
-	String idString = root["list"]["weather"]["id"];
-	String timeS = root["list"]["dt_txt"];
+	String icon_0 = root["list"][0]["weather"][0]["icon"];
+	String icon_1 = root["list"][1]["weather"][0]["icon"];
+	String icon_2 = root["list"][2]["weather"][0]["icon"];
+	String icon_3 = root["list"][3]["weather"][0]["icon"];
+	String icon_4 = root["list"][4]["weather"][0]["icon"];
+	String icon_5 = root["list"][5]["weather"][0]["icon"];
+	String temp_0 = root["list"][0]["main"]["temp"];
+	String temp_1 = root["list"][1]["main"]["temp"];
+	String temp_2 = root["list"][2]["main"]["temp"];
+	String temp_3 = root["list"][3]["main"]["temp"];
+	String temp_4 = root["list"][4]["main"]["temp"];
+	String temp_5 = root["list"][5]["main"]["temp"];
 
-	weatherID = idString.toInt();
-	Serial.print("WeatherID: ");
-	Serial.println(weatherID);
-	Serial.println(location);
-	Serial.println(temperature);
-	Serial.println(weather);
-	Serial.println(description);
-	Serial.println(timeS);
+	Serial.println(icon_0);
+	Serial.println(icon_1);
+	Serial.println(icon_2);
+	Serial.println(icon_3);
+	Serial.println(icon_4);
+	Serial.println(icon_5);
+	Serial.println(temp_0);
+	Serial.println(temp_1);
+	Serial.println(temp_2);
+	Serial.println(temp_3);
+	Serial.println(temp_4);
+	Serial.println(temp_5);
+
+	Serial.println("________________________________________________");
 	Serial.println(result);
+	Serial.println("________________________________________________");
 }
 
